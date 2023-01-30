@@ -11,20 +11,21 @@ contract ForkDelta {
   
   using LSafeMath for uint;
 
-  /// Variables
-  address public admin; // the admin address
-  address public feeAccount; // the account that will receive fees
-  uint public feeTake; // percentage times (1 ether)
-  uint public freeUntilDate; // date in UNIX timestamp that trades will be free until
-  bool private depositingTokenFlag; // True when Token.transferFrom is being called from depositToken
-  mapping (address => mapping (address => uint)) public tokens; // mapping of token addresses to mapping of account balances (token=0 means Ether)
-  mapping (address => mapping (bytes32 => bool)) public orders; // mapping of user accounts to mapping of order hashes to booleans (true = submitted by user, equivalent to offchain signature)
-  mapping (address => mapping (bytes32 => uint)) public orderFills; // mapping of user accounts to mapping of order hashes to uints (amount of order that has been filled)
-  address public predecessor; // Address of the previous version of this contract. If address(0), this is the first version
-  address public successor; // Address of the next version of this contract. If address(0), this is the most up to date version.
-  uint16 public version; // This is the version # of the contract
+  /// 변수
+  address public admin; // 어드민 주소 
+  address public feeAccount; //  fee받을 계정
+  uint public feeTake; // fee 백분율
+  uint public freeUntilDate; // 날짜 unix timestamp 기준 이때까지 free trade 이후는 유료
+  bool private depositingTokenFlag; // depositToken 부터 호출시 Token.transferFrom true 
+  mapping (address => mapping (address => uint)) public tokens; // 계정에 토큰 주소 매핑 해당 주소의 토큰 잔액을 표현, token = 0 은 ether용 
+  mapping (address => mapping (bytes32 => bool)) public orders; // 사용자 주문에대한 해시값(주문 해시)이 false, true인지 표시 (true = submitted by user, 오브체인과 일치?)
+  
+  mapping (address => mapping (bytes32 => uint)) public orderFills; // 사용자 주문에 대한 주문, 주문이 실행될때 마다 (완료된 주문수량이 쌓임)
+  address public predecessor; // 이전 버전정보 0이면 첫번째 버전임 
+  address public successor; // 이계약의 다음 버전 0이면 첫번째 
+  uint16 public version; // 버전 번호
 
-  /// Logging Events
+  /// 이벤트
   event Order(address tokenGet, uint amountGet, address tokenGive, uint amountGive, uint expires, uint nonce, address user);
   event Cancel(address tokenGet, uint amountGet, address tokenGive, uint amountGive, uint expires, uint nonce, address user, uint8 v, bytes32 r, bytes32 s);
   event Trade(address tokenGet, uint amountGet, address tokenGive, uint amountGive, address get, address give);
@@ -32,13 +33,13 @@ contract ForkDelta {
   event Withdraw(address token, address user, uint amount, uint balance);
   event FundsMigrated(address user, address newContract);
 
-  /// This is a modifier for functions to check if the sending user address is the same as the admin user address.
+  /// 어드민인지 체크 
   modifier isAdmin() {
       require(msg.sender == admin);
       _;
   }
 
-  /// Constructor function. This is only called on contract creation.
+  /// 생성자 함수, contract creation 때만 생성
   function ForkDelta(address admin_, address feeAccount_, uint feeTake_, uint freeUntilDate_, address predecessor_) public {
     admin = admin_;
     feeAccount = feeAccount_;
@@ -54,34 +55,34 @@ contract ForkDelta {
     }
   }
 
-  /// The fallback function. Ether transfered into the contract is not accepted.
+  /// 폴백 리버트 
   function() public {
     revert();
   }
 
-  /// Changes the official admin user address. Accepts Ethereum address.
+  /// 어드민 주소 체인지
   function changeAdmin(address admin_) public isAdmin {
     require(admin_ != address(0));
     admin = admin_;
   }
 
-  /// Changes the account address that receives trading fees. Accepts Ethereum address.
+  /// FEE 어카운트 체인지 
   function changeFeeAccount(address feeAccount_) public isAdmin {
     feeAccount = feeAccount_;
   }
 
-  /// Changes the fee on takes. Can only be changed to a value less than it is currently set at.
+  /// feetake를 변경함 값은 작아야함
   function changeFeeTake(uint feeTake_) public isAdmin {
     require(feeTake_ <= feeTake);
     feeTake = feeTake_;
   }
 
-  /// Changes the date that trades are free until. Accepts UNIX timestamp.
+  /// fee date 체인지, 유닉스 타임스탬프 
   function changeFreeUntilDate(uint freeUntilDate_) public isAdmin {
     freeUntilDate = freeUntilDate_;
   }
   
-  /// Changes the successor. Used in updating the contract.
+  /// successor 변경
   function setSuccessor(address successor_) public isAdmin {
     require(successor_ != address(0));
     successor = successor_;
@@ -92,9 +93,7 @@ contract ForkDelta {
   ////////////////////////////////////////////////////////////////////////////////
 
   /**
-  * This function handles deposits of Ether into the contract.
-  * Emits a Deposit event.
-  * Note: With the payable modifier, this function accepts Ether.
+   *이더 입금처리  
   */
   function deposit() public payable {
     tokens[0][msg.sender] = tokens[0][msg.sender].add(msg.value);
@@ -102,10 +101,7 @@ contract ForkDelta {
   }
 
   /**
-  * This function handles withdrawals of Ether from the contract.
-  * Verifies that the user has enough funds to cover the withdrawal.
-  * Emits a Withdraw event.
-  * @param amount uint of the amount of Ether the user wishes to withdraw
+   * 이더 출금처리
   */
   function withdraw(uint amount) public {
     require(tokens[0][msg.sender] >= amount);
@@ -115,47 +111,40 @@ contract ForkDelta {
   }
 
   /**
-  * This function handles deposits of Ethereum based tokens to the contract.
-  * Does not allow Ether.
-  * If token transfer fails, transaction is reverted and remaining gas is refunded.
-  * Emits a Deposit event.
-  * Note: Remember to call Token(address).approve(this, amount) or this contract will not be able to do the transfer on your behalf.
+  * evm 기반 토큰 입금을 처리 
+  * 가스 환불0, 이더 입금 허용x 
+  * approve안되면 트랜스퍼 안댐 
   * @param token Ethereum contract address of the token or 0 for Ether
   * @param amount uint of the amount of the token the user wishes to deposit
   */
-  function depositToken(address token, uint amount) public {
+  function depositToken(address token, uint amount) public 
+  {
     require(token != 0);
     depositingTokenFlag = true;
     require(IToken(token).transferFrom(msg.sender, this, amount));
     depositingTokenFlag = false;
     tokens[token][msg.sender] = tokens[token][msg.sender].add(amount);
     Deposit(token, msg.sender, amount, tokens[token][msg.sender]);
- }
+  }
 
   /**
   * This function provides a fallback solution as outlined in ERC223.
-  * If tokens are deposited through depositToken(), the transaction will continue.
-  * If tokens are sent directly to this contract, the transaction is reverted.
+  * 토큰이 이계약으로 직접 전송되면 거래가 취소 
   * @param sender Ethereum address of the sender of the token
   * @param amount amount of the incoming tokens
   * @param data attached data similar to msg.data of Ether transactions
   */
   function tokenFallback( address sender, uint amount, bytes data) public returns (bool ok) {
-      if (depositingTokenFlag) {
-        // Transfer was initiated from depositToken(). User token balance will be updated there.
+      if (depositingTokenFlag) { // depositToken() 부터 Transfer, 유저 밸런스 업데이트 수행해도됨
+       
         return true;
-      } else {
-        // Direct ECR223 Token.transfer into this contract not allowed, to keep it consistent
-        // with direct transfers of ECR20 and ETH.
+      } else { // erc223 token.tranfer 사용해서 해당 컨트랙트로 접근 허용하지않음 일관성을 위해 erc20,eth도 포함 
         revert();
       }
   }
   
   /**
-  * This function handles withdrawals of Ethereum based tokens from the contract.
-  * Does not allow Ether.
-  * If token transfer fails, transaction is reverted and remaining gas is refunded.
-  * Emits a Withdraw event.
+  * EVM 기반 토큰들 출금 처리 , 이더 코인 처리안함, 실패시 가스비 환불
   * @param token Ethereum contract address of the token or 0 for Ether
   * @param amount uint of the amount of the token the user wishes to withdraw
   */
@@ -168,7 +157,7 @@ contract ForkDelta {
   }
 
   /**
-  * Retrieves the balance of a token based on a user address and token address.
+  * 토큰 잔액 조회
   * @param token Ethereum contract address of the token or 0 for Ether
   * @param user Ethereum address of the user
   * @return the amount of tokens on the exchange for a given user address
