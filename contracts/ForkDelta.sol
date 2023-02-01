@@ -17,9 +17,11 @@ contract ForkDelta {
   uint public feeTake; // fee 백분율
   uint public freeUntilDate; // 날짜 unix timestamp 기준 이때까지 free trade 이후는 유료
   bool private depositingTokenFlag; // depositToken 부터 호출시 Token.transferFrom true 
-  mapping (address => mapping (address => uint)) public tokens; // 계정에 토큰 주소 매핑 해당 주소의 토큰 잔액을 표현, token = 0 은 ether용 
+  // tokens<토큰 주소><계정 주소> = <토큰 보유량>
+  mapping (address => mapping (address => uint)) public tokens; // 계정에 토큰 주소 매핑 해당 주소의 토큰 잔액을 표현, token = 0 은 ether용
+  // orders<사용자 계정><주문 정보 해시 값> = <주문 상태>
   mapping (address => mapping (bytes32 => bool)) public orders; // 사용자 주문에대한 해시값(주문 해시)이 false, true인지 표시 (true = submitted by user, 오브체인과 일치?)
-  
+  // orderfills<사용자 계정><주문 정보 해시 값> = <거래된 토큰 양>
   mapping (address => mapping (bytes32 => uint)) public orderFills; // 사용자 주문에 대한 주문, 주문이 실행될때 마다 (완료된 주문수량이 쌓임)
   address public predecessor; // 이전 버전정보 0이면 첫번째 버전임 
   address public successor; // 이계약의 다음 버전 0이면 첫번째 
@@ -171,41 +173,37 @@ contract ForkDelta {
   ////////////////////////////////////////////////////////////////////////////////
 
   /**
-  * Stores the active order inside of the contract.
-  * Emits an Order event.
+  * 컨트렉트 안에 활성된 주문을 저장 
   * Note: tokenGet & tokenGive can be the Ethereum contract address.
-  * @param tokenGet Ethereum contract address of the token to receive
-  * @param amountGet uint amount of tokens being received
-  * @param tokenGive Ethereum contract address of the token to give
-  * @param amountGive uint amount of tokens being given
-  * @param expires uint of block number when this order should expire
-  * @param nonce arbitrary random number
+  * @param tokenGet 받을 Ethereum contract 기반 token address -> 받을 토큰의 어드레스
+  * @param amountGet 받을 토큰의 양
+  * @param tokenGive 줄 토큰의 Ethereum contract 기반 token address
+  * @param amountGive 줄 토큰의 양
+  * @param expires 주문이 만료될 블록 번호 단위
+  * @param nonce arbitrary 난수
   */
   function order(address tokenGet, uint amountGet, address tokenGive, uint amountGive, uint expires, uint nonce) public {
     bytes32 hash = sha256(this, tokenGet, amountGet, tokenGive, amountGive, expires, nonce);
-    orders[msg.sender][hash] = true;
-    Order(tokenGet, amountGet, tokenGive, amountGive, expires, nonce, msg.sender);
+    orders[msg.sender][hash] = true; // 주문자를 msg.send로 받아서 주문 넣고 true로 상태전환
+    Order(tokenGet, amountGet, tokenGive, amountGive, expires, nonce, msg.sender); // 이벤트
   }
 
   /**
-  * Facilitates a trade from one user to another.
-  * Requires that the transaction is signed properly, the trade isn't past its expiration, and all funds are present to fill the trade.
-  * Calls tradeBalances().
-  * Updates orderFills with the amount traded.
-  * Emits a Trade event.
-  * Note: tokenGet & tokenGive can be the Ethereum contract address.
-  * Note: amount is in amountGet / tokenGet terms.
-  * @param tokenGet Ethereum contract address of the token to receive
-  * @param amountGet uint amount of tokens being received
-  * @param tokenGive Ethereum contract address of the token to give
-  * @param amountGive uint amount of tokens being given
-  * @param expires uint of block number when this order should expire
-  * @param nonce arbitrary random number
-  * @param user Ethereum address of the user who placed the order
-  * @param v part of signature for the order hash as signed by user
-  * @param r part of signature for the order hash as signed by user
-  * @param s part of signature for the order hash as signed by user
-  * @param amount uint amount in terms of tokenGet that will be "buy" in the trade
+  * 사용자 : 사용자 거래 허용 
+  * Requires 조건 : 사용자 서명이 명확, 거래 expire 체크, 거래 하기위한 자금이 존재해야함
+  * tokenGet & tokenGive =>  Ethereum contract address 가 될수있음 
+  * amount는 (amountGet / tokenGet) 단위
+  * @param tokenGet 받을 토큰의 이더리움 컨트랙트 주소 
+  * @param amountGet 받을 토큰의 양 
+  * @param tokenGive 줘야할 토큰의 이더리움 컨트랙트 주소
+  * @param amountGive 줘야할 토큰양
+  * @param expires 주문이 만료될 블록 넘버 
+  * @param nonce arbitrary 랜덤 변수
+  * @param user 주문한 사용자 이더리움 계정 주소
+  * @param v 사용자가 서명한 주문 해시 서명의 일부분 
+  * @param r 사용자가 서명한 주문 해시 서명의 일부분 
+  * @param s 사용자가 서명한 주문 해시 서명의 일부분 
+  * @param amount 이 거래에서 구매할 토큰의 양 
   */
   function trade(address tokenGet, uint amountGet, address tokenGive, uint amountGive, uint expires, uint nonce, address user, uint8 v, bytes32 r, bytes32 s, uint amount) public {
     bytes32 hash = sha256(this, tokenGet, amountGet, tokenGive, amountGive, expires, nonce);
@@ -213,25 +211,24 @@ contract ForkDelta {
       (orders[user][hash] || ecrecover(keccak256("\x19Ethereum Signed Message:\n32", hash), v, r, s) == user) &&
       block.number <= expires &&
       orderFills[user][hash].add(amount) <= amountGet
-    ));
-    tradeBalances(tokenGet, amountGet, tokenGive, amountGive, user, amount);
-    orderFills[user][hash] = orderFills[user][hash].add(amount);
+    )); // 주문정보에 대한 서명 검증, 주문 만료 체크,  주문 가능한 수량이 존재한지 체크
+    tradeBalances(tokenGet, amountGet, tokenGive, amountGive, user, amount); // 거래에 관련된 사용자 토큰 잔앱 업데이트 
+    orderFills[user][hash] = orderFills[user][hash].add(amount); // 완료된 거래 금액으로 업데이트
     Trade(tokenGet, amount, tokenGive, amountGive.mul(amount) / amountGet, user, msg.sender);
   }
 
   /**
-  * This is a private function and is only being called from trade().
-  * Handles the movement of funds when a trade occurs.
-  * Takes fees.
-  * Updates token balances for both buyer and seller.
-  * Note: tokenGet & tokenGive can be the Ethereum contract address.
-  * Note: amount is in amountGet / tokenGet terms.
-  * @param tokenGet Ethereum contract address of the token to receive
-  * @param amountGet uint amount of tokens being received
-  * @param tokenGive Ethereum contract address of the token to give
-  * @param amountGive uint amount of tokens being given
-  * @param user Ethereum address of the user who placed the order
-  * @param amount uint amount in terms of tokenGet that will be "buy" in the trade
+  * trade 수행시 자금이동을 처리 
+  * 수수료 처리 
+  * 구매자 판매자 모두 토큰 잔액 업데이트 
+  * tokenGet & tokenGive 는  Ethereum contract address가 될수도있음 
+  * amount는 (amountGet / tokenGet) 단위
+  * @param tokenGet 받을 토큰의 이더리움 컨트랙트 주소 
+  * @param amountGet 받을 토큰의 양 
+  * @param tokenGive 줘야하는 토큰 이더리움 컨트랙트 주소 
+  * @param amountGive 줘야하는 토큰 양
+  * @param user order 한 사용자의 이더리움 계정 주소
+  * @param amount 이 거래에서 구매할 토큰의 양 
   */
   function tradeBalances(address tokenGet, uint amountGet, address tokenGive, uint amountGive, address user, uint amount) private {
     
@@ -241,36 +238,37 @@ contract ForkDelta {
       feeTakeXfer = amount.mul(feeTake).div(1 ether);
     }
     
-    tokens[tokenGet][msg.sender] = tokens[tokenGet][msg.sender].sub(amount.add(feeTakeXfer));
-    tokens[tokenGet][user] = tokens[tokenGet][user].add(amount);
-    tokens[tokenGet][feeAccount] = tokens[tokenGet][feeAccount].add(feeTakeXfer);
-    tokens[tokenGive][user] = tokens[tokenGive][user].sub(amountGive.mul(amount).div(amountGet));
-    tokens[tokenGive][msg.sender] = tokens[tokenGive][msg.sender].add(amountGive.mul(amount).div(amountGet));
+    tokens[tokenGet][msg.sender] = tokens[tokenGet][msg.sender].sub(amount.add(feeTakeXfer)); // 여기서 msg.sender는 trade 함수 호출자 구매자?
+    tokens[tokenGet][user] = tokens[tokenGet][user].add(amount); //  order한 사용자가 보유한 토큰을 구매한 만큼 추가  
+    tokens[tokenGet][feeAccount] = tokens[tokenGet][feeAccount].add(feeTakeXfer); // fee어카운트에 수수료 추가및 업데이트 
+    tokens[tokenGive][user] = tokens[tokenGive][user].sub(amountGive.mul(amount).div(amountGet)); //  order한 사용자가 보유한 토큰을 뺴감, 트레이딩  
+    tokens[tokenGive][msg.sender] = tokens[tokenGive][msg.sender].add(amountGive.mul(amount).div(amountGet)); // msg.sender 가져가야할 토큰을 추가함 위에 공식이랑 연동
   }
 
+
   /**
-  * This function is to test if a trade would go through.
-  * Note: tokenGet & tokenGive can be the Ethereum contract address.
-  * Note: amount is in amountGet / tokenGet terms.
-  * @param tokenGet Ethereum contract address of the token to receive
-  * @param amountGet uint amount of tokens being received
-  * @param tokenGive Ethereum contract address of the token to give
-  * @param amountGive uint amount of tokens being given
-  * @param expires uint of block number when this order should expire
-  * @param nonce arbitrary random number
-  * @param user Ethereum address of the user who placed the order
-  * @param v part of signature for the order hash as signed by user
-  * @param r part of signature for the order hash as signed by user
-  * @param s part of signature for the order hash as signed by user
-  * @param amount uint amount in terms of tokenGet that will be "buy" in the trade
-  * @param sender Ethereum address of the user taking the order
-  * @return bool: true if the trade would be successful, false otherwise
+  * 거래가 되는지 테스트하는 함수 폴링인듯? 
+  * tokenGet & tokenGive 는  Ethereum contract address가 될수도있음 
+  * amount는 (amountGet / tokenGet) 단위
+  * @param tokenGet 받을 토큰의 이더리움 컨트랙트 주소 
+  * @param amountGet 받을 토큰의 양 
+  * @param tokenGive 줘야할 토큰의 이더리움 컨트랙트 주소
+  * @param amountGive 줘야할 토큰양
+  * @param expires 주문이 만료될 블록 넘버 
+  * @param nonce arbitrary 랜덤 변수
+  * @param user 주문한 사용자 이더리움 계정 주소
+  * @param v 사용자가 서명한 주문 해시 서명의 일부분 
+  * @param r 사용자가 서명한 주문 해시 서명의 일부분 
+  * @param s 사용자가 서명한 주문 해시 서명의 일부분 
+  * @param amount 이 거래에서 구매할 토큰의 양 
+  * @param sender order를 요청한 계정 주소 
+  * @return bool: true거래성공, false 거래 실패
   */
   function testTrade(address tokenGet, uint amountGet, address tokenGive, uint amountGive, uint expires, uint nonce, address user, uint8 v, bytes32 r, bytes32 s, uint amount, address sender) public constant returns(bool) {
     if (!(
       tokens[tokenGet][sender] >= amount &&
       availableVolume(tokenGet, amountGet, tokenGive, amountGive, expires, nonce, user, v, r, s) >= amount
-      )) { 
+      )) {  // 거래 가능한지 체크, 
       return false;
     } else {
       return true;
@@ -278,19 +276,19 @@ contract ForkDelta {
   }
 
   /**
-  * This function checks the available volume for a given order.
-  * Note: tokenGet & tokenGive can be the Ethereum contract address.
-  * @param tokenGet Ethereum contract address of the token to receive
-  * @param amountGet uint amount of tokens being received
-  * @param tokenGive Ethereum contract address of the token to give
-  * @param amountGive uint amount of tokens being given
-  * @param expires uint of block number when this order should expire
-  * @param nonce arbitrary random number
-  * @param user Ethereum address of the user who placed the order
-  * @param v part of signature for the order hash as signed by user
-  * @param r part of signature for the order hash as signed by user
-  * @param s part of signature for the order hash as signed by user
-  * @return uint: amount of volume available for the given order in terms of amountGet / tokenGet
+  * 주어진 order에 사용가능한 볼륨있는지 체크 
+  * Note: tokenGet & tokenGive 이더리움 컨트랙트 주소가 될수있음 
+  * @param tokenGet 받을 토큰의 이더리움 컨트랙트 주소 
+  * @param amountGet 받을 토큰의 양 
+  * @param tokenGive 줘야할 토큰의 이더리움 컨트랙트 주소
+  * @param amountGive 줘야할 토큰양
+  * @param expires 주문이 만료될 블록 넘버 
+  * @param nonce arbitrary 랜덤 변수
+  * @param user 주문한 사용자 이더리움 계정 주소
+  * @param v 사용자가 서명한 주문 해시 서명의 일부분 
+  * @param r 사용자가 서명한 주문 해시 서명의 일부분 
+  * @param s 사용자가 서명한 주문 해시 서명의 일부분 
+  * @return uint: 주어진 주문에 사용가능한 볼륨의 양 (amountGet / tokenGet) 면에서
   */
   function availableVolume(address tokenGet, uint amountGet, address tokenGive, uint amountGive, uint expires, uint nonce, address user, uint8 v, bytes32 r, bytes32 s) public constant returns(uint) {
     bytes32 hash = sha256(this, tokenGet, amountGet, tokenGive, amountGive, expires, nonce);
@@ -311,19 +309,19 @@ contract ForkDelta {
   }
 
   /**
-  * This function checks the amount of an order that has already been filled.
-  * Note: tokenGet & tokenGive can be the Ethereum contract address.
-  * @param tokenGet Ethereum contract address of the token to receive
-  * @param amountGet uint amount of tokens being received
-  * @param tokenGive Ethereum contract address of the token to give
-  * @param amountGive uint amount of tokens being given
-  * @param expires uint of block number when this order should expire
-  * @param nonce arbitrary random number
-  * @param user Ethereum address of the user who placed the order
-  * @param v part of signature for the order hash as signed by user
-  * @param r part of signature for the order hash as signed by user
-  * @param s part of signature for the order hash as signed by user
-  * @return uint: amount of the given order that has already been filled in terms of amountGet / tokenGet
+  *  이미 채워진 주문의 양을 확인
+  * Note: tokenGet & tokenGive 이더 컨트랙트 주소일수있음 
+  * @param tokenGet 받을 토큰의 이더리움 컨트랙트 주소 
+  * @param amountGet 받을 토큰의 양 
+  * @param tokenGive 줘야할 토큰의 이더리움 컨트랙트 주소
+  * @param amountGive 줘야할 토큰양
+  * @param expires 주문이 만료될 블록 넘버 
+  * @param nonce arbitrary 랜덤 변수
+  * @param user 주문한 사용자 이더리움 계정 주소
+  * @param v 사용자가 서명한 주문 해시 서명의 일부분 
+  * @param r 사용자가 서명한 주문 해시 서명의 일부분 
+  * @param s 사용자가 서명한 주문 해시 서명의 일부분 
+  * @return uint: 주어진 주문에 사용가능한 볼륨의 양 (amountGet / tokenGet) 면에서
   */
   function amountFilled(address tokenGet, uint amountGet, address tokenGive, uint amountGive, uint expires, uint nonce, address user, uint8 v, bytes32 r, bytes32 s) public constant returns(uint) {
     bytes32 hash = sha256(this, tokenGet, amountGet, tokenGive, amountGive, expires, nonce);
@@ -331,26 +329,24 @@ contract ForkDelta {
   }
 
   /**
-  * This function cancels a given order by editing its fill data to the full amount.
-  * Requires that the transaction is signed properly.
+  * 주문 취소
   * Updates orderFills to the full amountGet
-  * Emits a Cancel event.
-  * Note: tokenGet & tokenGive can be the Ethereum contract address.
-  * @param tokenGet Ethereum contract address of the token to receive
-  * @param amountGet uint amount of tokens being received
-  * @param tokenGive Ethereum contract address of the token to give
-  * @param amountGive uint amount of tokens being given
-  * @param expires uint of block number when this order should expire
-  * @param nonce arbitrary random number
-  * @param v part of signature for the order hash as signed by user
-  * @param r part of signature for the order hash as signed by user
-  * @param s part of signature for the order hash as signed by user
-  * @return uint: amount of the given order that has already been filled in terms of amountGet / tokenGet
+  * Note: tokenGet & tokenGive 이더리움 컨트랙트 주소 일수있음 
+  * @param tokenGet 받을 토큰 주소 
+  * @param amountGet 받을 토큰의 양 
+  * @param tokenGive 줘야되는 토큰 주소 
+  * @param amountGive 줘야되는 토큰양 
+  * @param expires 만료 
+  * @param nonce arbitrary 난수 
+  * @param v 사용자가 서명한 주문 해시 서명의 일부분 
+  * @param r 사용자가 서명한 주문 해시 서명의 일부분 
+  * @param s 사용자가 서명한 주문 해시 서명의 일부분 
+  * @return uint: (amountGet / tokenGet) 기준으로 이미 채워진 지정된 주문의 양  -> 없는데? 없어진듯? 
   */
   function cancelOrder(address tokenGet, uint amountGet, address tokenGive, uint amountGive, uint expires, uint nonce, uint8 v, bytes32 r, bytes32 s) public {
     bytes32 hash = sha256(this, tokenGet, amountGet, tokenGive, amountGive, expires, nonce);
     require ((orders[msg.sender][hash] || ecrecover(keccak256("\x19Ethereum Signed Message:\n32", hash), v, r, s) == msg.sender));
-    orderFills[msg.sender][hash] = amountGet;
+    orderFills[msg.sender][hash] = amountGet; // 
     Cancel(tokenGet, amountGet, tokenGive, amountGive, expires, nonce, msg.sender, v, r, s);
   }
 
