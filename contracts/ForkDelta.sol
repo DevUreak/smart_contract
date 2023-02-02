@@ -357,10 +357,7 @@ contract ForkDelta {
   ////////////////////////////////////////////////////////////////////////////////
   
   /**
-  * User triggered function to migrate funds into a new contract to ease updates.
-  * Emits a FundsMigrated event.
-  * @param newContract Contract address of the new contract we are migrating funds to
-  * @param tokens_ Array of token addresses that we will be migrating to the new contract
+   * 업그레이드를 위한 계약인데 지금은 필요없는 소스 코드 
   */
   function migrateFunds(address newContract, address[] tokens_) public {
   
@@ -392,9 +389,8 @@ contract ForkDelta {
   }
   
   /**
-  * This function handles deposits of Ether into the contract, but allows specification of a user.
-  * Note: This is generally used in migration of funds.
-  * Note: With the payable modifier, this function accepts Ether.
+  * 해당 컨트랙트에 이더입급에 사용 
+  * 자금이동에 사용 
   */
   function depositForUser(address user) public payable {
     require(user != address(0));
@@ -403,13 +399,8 @@ contract ForkDelta {
   }
   
   /**
-  * This function handles deposits of Ethereum based tokens into the contract, but allows specification of a user.
-  * Does not allow Ether.
-  * If token transfer fails, transaction is reverted and remaining gas is refunded.
-  * Note: This is generally used in migration of funds.
-  * Note: Remember to call Token(address).approve(this, amount) or this contract will not be able to do the transfer on your behalf.
-  * @param token Ethereum contract address of the token
-  * @param amount uint of the amount of the token the user wishes to deposit
+  * 해당 컨트랙트에 이더외 토큰 입금 
+  * 자금 이동에 사용 셀프로 approve까지 호출해야함.. ㅋㅋ 
   */
   function depositTokenForUser(address token, uint amount, address user) public {
     require(token != address(0));
